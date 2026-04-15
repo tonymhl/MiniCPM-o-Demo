@@ -38,3 +38,12 @@ benchmark.json
 
 Dockerfile
 docker-compose.yml
+# 排除当前挂载的工作目录和证书
+my-workspace/
+
+# 排除 git 记录和本地虚拟环境
+.ipynb_checkpoints
+venv/
+
+# 排除可能存在的模型权重（如果不在 my-workspace 下的话）
+models/

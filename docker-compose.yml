@@ -6,7 +6,7 @@ services:
     ports:
       - "8006:8006"
     volumes:
-      - ./workspace:/workspace
+      - ./my-workspace:/workspace
     environment:
       - GATEWAY_PROTO=http
       # - CUDA_VISIBLE_DEVICES=0,1

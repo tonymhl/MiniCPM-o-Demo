@@ -46,4 +46,7 @@ AutoAWQ/
 
 dev_tools/
 
-benchmark.json
+benchmark.json*.whl
+*.whl
+decord/
+my-workspace/
