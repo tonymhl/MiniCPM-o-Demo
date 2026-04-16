@@ -26,6 +26,8 @@ PYTHON_BIN="${VENV_DIR}/bin/python"
 PYTHON="${PYTHON:-python3.10}"
 MAX_JOBS="${MAX_JOBS:-$(nproc 2>/dev/null || echo 8)}"
 FLASH_ATTN_VERSION=">=2.7.1,<=2.8.2"  # Officially recommended version range
+ARCH="$(uname -m)"
+SKIP_DECORD_BUILD="${SKIP_DECORD_BUILD:-0}"
 
 # ============ Colored Output ============
 
@@ -37,6 +39,39 @@ NC='\033[0m'  # No Color
 info()  { echo -e "${GREEN}[INFO]${NC} $1"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1"; }
+
+build_local_decord() {
+    if [ "${SKIP_DECORD_BUILD}" = "1" ]; then
+        warn "SKIP_DECORD_BUILD=1, skipping local decord build"
+        return
+    fi
+
+    if [ ! -d "decord" ]; then
+        warn "Local decord source tree not found, skipping decord build"
+        return
+    fi
+
+    if ! command -v ffmpeg >/dev/null 2>&1; then
+        warn "ffmpeg not found, skipping local decord build"
+        return
+    fi
+
+    if ! command -v cmake >/dev/null 2>&1 || ! command -v pkg-config >/dev/null 2>&1; then
+        warn "cmake/pkg-config not found, skipping local decord build"
+        return
+    fi
+
+    if ! pkg-config --exists libavcodec libavformat libavutil libavfilter libswresample; then
+        warn "FFmpeg development headers not found, skipping local decord build"
+        return
+    fi
+
+    info "Building local decord for ${ARCH}"
+    cmake -S decord -B decord/build -DUSE_CUDA=0 -DCMAKE_BUILD_TYPE=Release
+    cmake --build decord/build -j"${MAX_JOBS}"
+    "${PIP}" install ./decord/python
+    info "Local decord installed successfully"
+}
 
 # ============ Step 1: Create Virtual Environment ============
 
@@ -80,6 +115,23 @@ fi
 info "Step 3/4: Installing core dependencies (requirements.txt)"
 ${PIP} install -r requirements.txt
 info "Core dependencies installed successfully"
+
+if [ "${ARCH}" = "aarch64" ]; then
+    echo ""
+    info "ARM64 detected: attempting local decord build"
+    build_local_decord
+fi
+
+echo ""
+info "Verifying runtime dependencies"
+if ! ${PYTHON_BIN} -m pip check; then
+    warn "pip check reported missing or incompatible packages."
+    warn "On ARM64 platforms, you may need to build local decord manually from ./decord."
+fi
+
+if ! command -v ffmpeg >/dev/null 2>&1; then
+    warn "ffmpeg not found. Install system ffmpeg for video frame extraction and recording."
+fi
 
 # ============ Step 4: Install Flash Attention 2 (Not Recommended) ============
 
@@ -147,6 +199,20 @@ except ImportError:
 
 import transformers
 print(f'  Transformers: {transformers.__version__}')
+try:
+    import torchcodec
+    print(f'  TorchCodec:   {torchcodec.__version__} ✓')
+except ImportError:
+    print('  TorchCodec:   Not installed')
+
+try:
+    import decord
+    print(f'  Decord:       {getattr(decord, "__version__", "unknown")} ✓')
+except ImportError:
+    print('  Decord:       Not installed')
+
+import shutil
+print(f'  FFmpeg:       {"Found" if shutil.which("ffmpeg") else "Not found"}')
 print()
 print(f'  Attention Backend: {attn_backend}')
 "
