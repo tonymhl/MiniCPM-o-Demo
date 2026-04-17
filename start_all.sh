@@ -95,6 +95,17 @@ export HF_HOME="$PROJECT_DIR/tmp/huggingface"
 export HF_MODULES_CACHE="$HF_HOME/modules"
 mkdir -p "$HF_MODULES_CACHE"
 
+# torch.compile / Inductor 缓存与调优（提升 Omni Full-Duplex 实时性能）
+#   - FX_GRAPH_CACHE / AUTOGRAD_CACHE: 缓存编译结果，加速后续启动
+#   - NVFUSER_DISABLE=fallback: 避免 Blackwell 上偶发的 NVFuser fallback 噪音
+#   - TF32: Ampere+ / Blackwell 上的矩阵乘加速（精度几乎无损）
+export TORCHINDUCTOR_FX_GRAPH_CACHE="${TORCHINDUCTOR_FX_GRAPH_CACHE:-1}"
+export TORCHINDUCTOR_AUTOGRAD_CACHE="${TORCHINDUCTOR_AUTOGRAD_CACHE:-1}"
+export NVIDIA_TF32_OVERRIDE="${NVIDIA_TF32_OVERRIDE:-1}"
+# 如 vpm / resampler 编译在特定驱动下报错可回退：
+#   MINICPMO_COMPILE_SKIP="vpm,resampler" bash start_all.sh
+export MINICPMO_COMPILE_SKIP="${MINICPMO_COMPILE_SKIP:-}"
+
 # ============ 读取端口等配置 ============
 GATEWAY_PORT=$("$VENV_PYTHON" -c "import sys; sys.path.insert(0,'$PROJECT_DIR'); from config import get_config; print(get_config().gateway_port)" 2>/dev/null || echo "10024")
 WORKER_BASE_PORT=$("$VENV_PYTHON" -c "import sys; sys.path.insert(0,'$PROJECT_DIR'); from config import get_config; print(get_config().worker_base_port)" 2>/dev/null || echo "22400")

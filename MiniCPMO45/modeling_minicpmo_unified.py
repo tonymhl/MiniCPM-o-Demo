@@ -442,30 +442,51 @@ class MiniCPMO(MiniCPMOPreTrainedModel):
         compile_kwargs = dict(mode=mode, dynamic=dynamic)
         compiled_modules: list = []
         skipped_modules: list = []
+        failed_modules: list = []
 
-        # if hasattr(self, "vpm") and "vpm" not in skip:
-        #     self.vpm = torch.compile(self.vpm, **compile_kwargs)
-        #     compiled_modules.append("vpm")
-        # elif "vpm" in skip:
-        #     skipped_modules.append("vpm")
+        def _try_compile(name: str, getter, setter):
+            """Wrap one sub-module with torch.compile; on any failure fall back
+            to eager so that Omni full-duplex keeps working even if a particular
+            module can't be compiled on the current toolchain."""
+            if name in skip:
+                skipped_modules.append(name)
+                return
+            try:
+                mod = getter()
+            except Exception:
+                return
+            if mod is None:
+                return
+            try:
+                setter(torch.compile(mod, **compile_kwargs))
+                compiled_modules.append(name)
+            except Exception as e:  # noqa: BLE001 - intentionally broad
+                failed_modules.append((name, repr(e)))
+                logger.warning(
+                    f"[torch.compile] failed to wrap {name}: {e!r}; "
+                    f"falling back to eager for this module."
+                )
 
-        if hasattr(self, "llm") and "llm.model" not in skip:
-            self.llm.model = torch.compile(self.llm.model, **compile_kwargs)
-            compiled_modules.append("llm.model")
-        elif "llm.model" in skip:
-            skipped_modules.append("llm.model")
-
-        # if hasattr(self, "resampler") and "resampler" not in skip:
-        #     self.resampler = torch.compile(self.resampler, **compile_kwargs)
-        #     compiled_modules.append("resampler")
-        # elif "resampler" in skip:
-        #     skipped_modules.append("resampler")
-
-        if hasattr(self, "tts") and hasattr(self.tts, "model") and "tts.model" not in skip:
-            self.tts.model = torch.compile(self.tts.model, **compile_kwargs)
-            compiled_modules.append("tts.model")
-        elif "tts.model" in skip:
-            skipped_modules.append("tts.model")
+        _try_compile(
+            "vpm",
+            lambda: getattr(self, "vpm", None),
+            lambda m: setattr(self, "vpm", m),
+        )
+        _try_compile(
+            "llm.model",
+            lambda: self.llm.model if hasattr(self, "llm") else None,
+            lambda m: setattr(self.llm, "model", m),
+        )
+        _try_compile(
+            "resampler",
+            lambda: getattr(self, "resampler", None),
+            lambda m: setattr(self, "resampler", m),
+        )
+        _try_compile(
+            "tts.model",
+            lambda: self.tts.model if hasattr(self, "tts") and hasattr(self.tts, "model") else None,
+            lambda m: setattr(self.tts, "model", m),
+        )
 
         # Enable TF32 for faster matmul on Ampere+ GPUs
         torch.set_float32_matmul_precision("high")
@@ -477,6 +498,7 @@ class MiniCPMO(MiniCPMOPreTrainedModel):
             f"[torch.compile] Wrapping done ({elapsed:.2f}s), "
             f"compiled: {compiled_modules}"
             + (f", skipped: {skipped_modules}" if skipped_modules else "")
+            + (f", failed: {[n for n,_ in failed_modules]}" if failed_modules else "")
             + ". Actual compilation triggers on first forward."
         )
         return self
@@ -495,33 +517,42 @@ class MiniCPMO(MiniCPMOPreTrainedModel):
 
         swapped: list = []
 
-        if hasattr(self, "llm"):
-            cur = self.llm.model
+        def _swap(name: str, getter, setter):
+            cur = getter()
+            if cur is None:
+                return
             if enabled:
                 compiled = getattr(cur, "_compiled_ref", None)
                 if compiled is not None:
-                    self.llm.model = compiled
-                    swapped.append("llm.model")
+                    setter(compiled)
+                    swapped.append(name)
             else:
                 orig = getattr(cur, "_orig_mod", None)
                 if orig is not None:
                     orig._compiled_ref = cur
-                    self.llm.model = orig
-                    swapped.append("llm.model")
+                    setter(orig)
+                    swapped.append(name)
 
-        if hasattr(self, "tts") and hasattr(self.tts, "model"):
-            cur = self.tts.model
-            if enabled:
-                compiled = getattr(cur, "_compiled_ref", None)
-                if compiled is not None:
-                    self.tts.model = compiled
-                    swapped.append("tts.model")
-            else:
-                orig = getattr(cur, "_orig_mod", None)
-                if orig is not None:
-                    orig._compiled_ref = cur
-                    self.tts.model = orig
-                    swapped.append("tts.model")
+        _swap(
+            "vpm",
+            lambda: getattr(self, "vpm", None),
+            lambda m: setattr(self, "vpm", m),
+        )
+        _swap(
+            "llm.model",
+            lambda: self.llm.model if hasattr(self, "llm") else None,
+            lambda m: setattr(self.llm, "model", m),
+        )
+        _swap(
+            "resampler",
+            lambda: getattr(self, "resampler", None),
+            lambda m: setattr(self, "resampler", m),
+        )
+        _swap(
+            "tts.model",
+            lambda: self.tts.model if hasattr(self, "tts") and hasattr(self.tts, "model") else None,
+            lambda m: setattr(self.tts, "model", m),
+        )
 
         self._compile_active = enabled
         logger.info(f"[torch.compile] {'enabled' if enabled else 'disabled'} → swapped {swapped}")

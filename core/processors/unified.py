@@ -1410,8 +1410,15 @@ class UnifiedProcessor(BaseProcessor):
             compile_start = time.time()
             # AWQ: skip llm.model (custom INT4 kernels incompatible with compile),
             # but still compile vpm / resampler / tts.model (all float, full benefit).
-            skip = ["llm.model"] if is_quantized else None
-            self.model.apply_torch_compile(mode="default", dynamic=True, skip_modules=skip)
+            skip: list = ["llm.model"] if is_quantized else []
+            # Allow operator override via env var in case vpm/resampler compile
+            # fails on an exotic CUDA/PyTorch combo, e.g.
+            #   MINICPMO_COMPILE_SKIP="vpm,resampler" bash start_all.sh
+            import os as _os
+            _skip_env = _os.environ.get("MINICPMO_COMPILE_SKIP", "").strip()
+            if _skip_env:
+                skip = list({*skip, *(s.strip() for s in _skip_env.split(",") if s.strip())})
+            self.model.apply_torch_compile(mode="default", dynamic=True, skip_modules=skip or None)
             self.model.warmup_compile(ref_audio_path=self.ref_audio_path)
             compile_time = time.time() - compile_start
             logger.info(f"torch.compile + warmup done in {compile_time:.1f}s")
